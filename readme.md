@@ -2,6 +2,10 @@
 *Гайдук Алина Сергеевна*
 *Поток МЕТ ОПТ 1.1*
 
+## Ревью
+[Ссылка на ревью](https://drive.google.com/drive/folders/1gKRmd3Pj0I9a3WixrNuRGp75jFCgbRuq?dmr=1&ec=wgc-drive-hero-goto)
+
+---
 ## 1. Цель работы
 
 Реализовать программу на языке Python, которая:
