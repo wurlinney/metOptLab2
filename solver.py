@@ -4,153 +4,262 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-# ---------- разбор строки функции ----------
+# ---------- 1. Создание функции из строки ----------
 
-def make_function(expr: str):
+def make_function(expr):
     """
-    По строке expr вида 'x + math.sin(math.pi*x)'
-    строит функцию f(x), безопасно передавая только math и x.
+    Превращает строку expr в функцию f(x).
+    Разрешены sin, cos, exp, log, sqrt, pi, abs и переменная x.
+    Пример:
+        f = make_function("x**2 - 10*cos(2*pi*x) + 10")
+        print(f(0))  # 0
     """
-    allowed = {name: getattr(math, name) for name in dir(math) if not name.startswith("_")}
-    # добавим ещё numpy-константы/функции, если нужно
-    allowed.update({"np": np, "math": math})
+    # compile переводит строку expr в объект скомпилированного кода
+    code = compile(expr, "<string>", "eval")
 
-    def f(x: float) -> float:
-        return float(eval(expr, {"__builtins__": {}}, {**allowed, "x": x}))
+    safe_math = {
+        "sin": math.sin,
+        "cos": math.cos,
+        "tan": math.tan,
+        "exp": math.exp,
+        "log": math.log,
+        "sqrt": math.sqrt,
+        "pi": math.pi,
+        "abs": abs,
+    }
+
+    # Внутри make_function мы объявляем вложенную функцию f(x)
+    # eval(code, ...) - вычисляет скомпилированное выражение.
+    # {"__builtins__": None} - отключаем доступ к встроенным функциям Python (безопасность).
+    # Третий аргумент — словарь «локальных» переменных:
+    # **safe_math — разворачиваем наш словарь с sin, cos, pi, ...
+    # "x": x — добавляем переменную x, равную значению аргумента.
+    def f(x):
+        return eval(code, {"__builtins__": None}, {**safe_math, "x": x})
 
     return f
 
 
-# ---------- алгоритм Пиявского (поиск глобального минимума) ----------
+# ---------- 2. Метод Пиявского–Шуберта ----------
 
-def global_min_piyavskii(f, a: float, b: float, eps: float, max_iter: int = 1000):
+def piyavskii_shubert(f, a, b, L, eps=0.01, max_iter=1000):
     """
-    Глобальный минимум одномерной липшицевой функции на [a, b].
-    Алгоритм Пиявского с оценкой константы Липшица по текущим точкам.
-
-    Возвращает:
-        x_best, f_best, точки [(x_i, f_i)], число итераций
+    Метод Пиявского–Шуберта для глобального поиска минимума
+    липшицевой функции f на отрезке [a, b] с константой Липшица L.
     """
-    # старт: две точки на концах отрезка
-    x_points = [a, b]
-    f_points = [f(a), f(b)]
+    start_time = time.perf_counter()
 
-    # начальная оценка Липшица
-    L = abs(f_points[1] - f_points[0]) / (b - a)
-    if L <= 0:
-        L = 1.0
+    # список уже исследованных точек по x, сначала только a и b
+    X = [a, b]
+    F = [f(a), f(b)]
+    iterations = 2
 
-    iters = 2  # уже 2 вычисления функции
+    while iterations < max_iter:
+        f_best = min(F)
+        # минимальная нижняя оценка среди интервалов
+        m_best = float("inf")
+        x_new = None
 
-    while iters < max_iter:
-        # сортируем точки по x (на всякий случай)
-        pts = sorted(zip(x_points, f_points), key=lambda p: p[0])
-        x_points, f_points = [p[0] for p in pts], [p[1] for p in pts]
+        for i in range(len(X) - 1):
+            xi, xj = X[i], X[i + 1]
+            fi, fj = F[i], F[i + 1]
 
-        # пересчёт L по всем соседним парам (чуть расширяем для надёжности)
-        for i in range(len(x_points) - 1):
-            dx = x_points[i + 1] - x_points[i]
-            if dx == 0:
-                continue
-            df = abs(f_points[i + 1] - f_points[i]) / dx
-            if df > L:
-                L = df
-        L = L * 1.1  # небольшой запас
+            # точка пересечения конусов Липшица
+            x_mid = (fi - fj) / (2 * L) + (xi + xj) / 2
+            # нижняя оценка минимально возможного значения функции на интервале
+            m_i = (fi + fj) / 2 - L * (xj - xi) / 2
 
-        # характеристики интервалов и нижняя оценка
-        R = []
-        for i in range(len(x_points) - 1):
-            xi, fi = x_points[i], f_points[i]
-            xj, fj = x_points[i + 1], f_points[i + 1]
-            R_i = 0.5 * (fi + fj - L * (xj - xi))
-            R.append(R_i)
+            if m_i < m_best:
+                m_best = m_i
+                x_new = x_mid
 
-        R_min = min(R)
-        idx = R.index(R_min)  # интервал с наименьшей характеристикой
-
-        # текущий лучший верхний предел минимума
-        f_best = min(f_points)
-
-        # критерий остановки: разность верхней и нижней оценок
-        if f_best - R_min <= eps:
+        # Если зазор ≤ eps, значит, текущий минимум достаточно близок к глобальному, выходим из цикла
+        gap = f_best - m_best
+        if gap <= eps:
             break
 
-        # новая точка по формуле Пиявского
-        xi, fi = x_points[idx], f_points[idx]
-        xj, fj = x_points[idx + 1], f_points[idx + 1]
-        x_new = 0.5 * (xi + xj) - (fj - fi) / (2 * L)
-
         f_new = f(x_new)
-        iters += 1
+        iterations += 1
 
-        x_points.append(x_new)
-        f_points.append(f_new)
+        # находит позицию, куда нужно вставить x_new, чтобы список X оставался отсортированным
+        insert_pos = np.searchsorted(X, x_new)
+        X.insert(insert_pos, x_new)
+        F.insert(insert_pos, f_new)
 
-    # финальное упорядочивание
-    pts = sorted(zip(x_points, f_points), key=lambda p: p[0])
-    x_points, f_points = [p[0] for p in pts], [p[1] for p in pts]
-    f_best = min(f_points)
-    x_best = x_points[f_points.index(f_best)]
+    elapsed = time.perf_counter() - start_time
+    # индекс лучшей точки = индекс минимального значения в списке F
+    best_idx = int(np.argmin(F))
+    f_best = F[best_idx]
 
-    return x_best, f_best, list(zip(x_points, f_points)), iters
+    return X, F, best_idx, iterations, elapsed, m_best, f_best
 
 
-# ---------- визуализация ----------
+# ---------- 3. Визуализация ----------
 
-def visualize(f, a: float, b: float, x_best: float, f_best: float, sample_points):
-    """
-    Рисует:
-      - исходную функцию на [a, b];
-      - ломаную по точкам выборки;
-      - найденный минимум.
-    """
+def plot_results(f, a, b, X, F, best_idx, L, expr_str="", eps=0.01, ax=None):
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Переводим списки в массивы numpy
+    X = np.array(X)
+    F = np.array(F)
+
+    # xs — равномерная сетка из 1000 точек на [a, b]
     xs = np.linspace(a, b, 1000)
-    ys = [f(x) for x in xs]
+    # ys — значения функции в этих точках
+    ys = np.array([f(float(x)) for x in xs])
 
-    plt.figure(figsize=(10, 6))
-    plt.plot(xs, ys, label="f(x)")
+    # Строим нижнюю оценку функции (ломаную) в каждой точке xg
+    lb = []
+    for xg in xs:
+        lb_val = max(F[i] - L * abs(xg - X[i]) for i in range(len(X)))
+        lb.append(lb_val)
+    lb = np.array(lb)
 
-    # точки выборки и ломаная
-    sp_x = [p[0] for p in sample_points]
-    sp_y = [p[1] for p in sample_points]
-    plt.plot(sp_x, sp_y, "o-", label="точки алгоритма")
+    ax.plot(xs, ys, label="f(x)", linewidth=2)
+    ax.plot(xs, lb, linestyle="--", label="Нижняя оценка", linewidth=1)
+    ax.scatter(X, F, s=30, label="Точки метода")
 
-    # минимум
-    plt.scatter([x_best], [f_best], s=80, zorder=5, label=f"минимум ≈ ({x_best:.3f}, {f_best:.3f})")
+    x_star, f_star = X[best_idx], F[best_idx]
+    ax.scatter([x_star], [f_star], color="red", s=60, label="Найденный минимум")
+    ax.axvline(x_star, color="red", linestyle=":", linewidth=1)
+    ax.axhline(f_star, color="red", linestyle=":", linewidth=1)
 
-    plt.title("Глобальный поиск минимума (метод Пиявского)")
-    plt.xlabel("x")
-    plt.ylabel("f(x)")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
+    title = "Метод Пиявского–Шуберта"
+    if expr_str:
+        title += f"\n f(x) = {expr_str}"
+    ax.set_title(title)
+    ax.set_xlabel("x")
+    ax.set_ylabel("f(x)")
+    ax.grid(True)
+    ax.legend()
+
+
+# ---------- 4. Вспомогательная функция: единый запуск ----------
+
+def run_experiment(expr, a, b, L, eps):
+    """
+    Общая функция: принимает строку expr и параметры,
+    запускает метод, печатает результаты и рисует график.
+    """
+    f = make_function(expr)
+
+    # если пользователь случайно ввёл a > b
+    if a > b:
+        a, b = b, a
+        print(f"[!] Поменяла концы местами: теперь отрезок [{a}, {b}]")
+
+    X, F, best_idx, iterations, elapsed, m_best, f_best = piyavskii_shubert(
+        f, a, b, L, eps=eps, max_iter=1000
+    )
+    # Координаты найденного минимума
+    x_star = X[best_idx]
+    f_star = F[best_idx]
+
+    print("\n=== Результаты ===")
+    print(f"Функция: f(x) = {expr}")
+    print(f"Отрезок: [{a}, {b}]")
+    print(f"L = {L}, eps = {eps}")
+    print(f"x* ≈ {x_star:.6f}, f(x*) ≈ {f_star:.6f}")
+    print(f"Итераций (вычислений f): {iterations}")
+    print(f"Нижняя оценка m_best ≈ {m_best:.6f}")
+    print(f"Зазор f_best - m_best ≈ {f_best - m_best:.6f}")
+    print(f"Время: {elapsed:.6f} с")
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    plot_results(f, a, b, X, F, best_idx, L, expr_str=expr, eps=eps, ax=ax)
     plt.show()
 
 
-# ---------- пример запуска: функция Растригина в 1D ----------
+# ---------- 5. Режимы ----------
+
+def mode_rastrigin():
+    """
+    Режим: функция Растригина.
+    Пользователь может либо взять параметры по умолчанию,
+    либо ввести свои a, b, L, eps.
+    """
+    expr = "x**2 - 10*cos(2*pi*x) + 10"
+    print("=== Режим: функция Растригина (1D) ===")
+    print(f"По умолчанию используется f(x) = {expr}")
+    use_default = input("Использовать параметры по умолчанию? (y/n): ").strip().lower()
+
+    if use_default == "y" or use_default == "д":
+        a, b = -5.12, 5.12
+        L = 80.0
+        eps = 0.01
+    else:
+        a = float(input("Левый конец отрезка a: "))
+        b = float(input("Правый конец отрезка b: "))
+        L = float(input("Оценка константы Липшица L (> 0): "))
+        eps = float(input("Точность eps (например, 0.01): "))
+
+    run_experiment(expr, a, b, L, eps)
+
+
+def mode_ackley():
+    """
+    Режим: одномерное сечение функции Экли.
+    Пользователь может либо взять параметры по умолчанию,
+    либо ввести свои.
+    """
+    expr = (
+        "-20*exp(-0.2*sqrt(0.5*x**2)) "
+        "- exp(0.5*(cos(2*pi*x) + 1)) "
+        "+ 20 + exp(1)"
+    )
+    print("=== Режим: функция Экли (Ackley), 1D-сечение ===")
+    print("Берём стандартную 2D Ackley, фиксируем y = 0.")
+    print(f"По умолчанию используется f(x) = {expr}")
+    use_default = input("Использовать параметры по умолчанию? (y/n): ").strip().lower()
+
+    if use_default == "y" or use_default == "д":
+        a, b = -5.0, 5.0
+        L = 20.0
+        eps = 0.01
+    else:
+        a = float(input("Левый конец отрезка a: "))
+        b = float(input("Правый конец отрезка b: "))
+        L = float(input("Оценка константы Липшица L (> 0): "))
+        eps = float(input("Точность eps (например, 0.01): "))
+
+    run_experiment(expr, a, b, L, eps)
+
+
+def mode_custom():
+    """
+    Полностью пользовательский режим:
+    пользователь вводит f(x), [a, b], L, eps.
+    """
+    print("=== Пользовательский режим (произвольная функция) ===")
+    print("Пример функции: x**2 - 10*cos(2*pi*x) + 10")
+    print("Можно использовать: sin, cos, exp, log, sqrt, pi, abs и переменную x.\n")
+
+    expr = input("Введите выражение для f(x): ").strip()
+    a = float(input("Левый конец отрезка a: "))
+    b = float(input("Правый конец отрезка b: "))
+    L = float(input("Оценка константы Липшица L (> 0): "))
+    eps = float(input("Точность eps (например, 0.01): "))
+
+    run_experiment(expr, a, b, L, eps)
+
+
+# ---------- 6. Главное меню ----------
 
 if __name__ == "__main__":
-    # Пример функции: одномерная Растригина, много локальных минимумов
-    # f(x) = x^2 - 10*cos(2*pi*x) + 10  на [-4, 4]
-    expr = "x**2 - 10*math.cos(2*math.pi*x) + 10"
+    print("Выберите режим работы программы:")
+    print("1 — Тест на функции Растригина")
+    print("2 — Тест на функции Экли")
+    print("3 — Своя (произвольная) функция")
 
-    a, b = -4.0, 4.0
-    eps = 0.01
+    mode = input("Ваш выбор (1/2/3): ").strip()
 
-    f = make_function(expr)
-
-    start = time.perf_counter()
-    x_min, f_min, pts, iters = global_min_piyavskii(f, a, b, eps)
-    elapsed = time.perf_counter() - start
-
-    print("Функция: f(x) =", expr)
-    print(f"Отрезок: [{a}, {b}]")
-    print(f"Точность eps = {eps}")
-    print()
-    print(f"Приближённый минимум:")
-    print(f"  x* ≈ {x_min:.6f}")
-    print(f"  f(x*) ≈ {f_min:.6f}")
-    print(f"Число итераций (вычислений функции): {iters}")
-    print(f"Время работы: {elapsed:.6f} с")
-
-    visualize(f, a, b, x_min, f_min, pts)
+    if mode == "1":
+        mode_rastrigin()
+    elif mode == "2":
+        mode_ackley()
+    elif mode == "3":
+        mode_custom()
+    else:
+        print("Неизвестный выбор, запускаю пользовательский режим по умолчанию.\n")
+        mode_custom()
